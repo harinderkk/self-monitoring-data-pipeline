@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: stg_market_data
+    description: "Cleaned Bank of Canada market data series"
+    columns:
+      - name: id
+        description: "Primary key"
+        tests:
+          - unique
+          - not_null
+      - name: series_id
+        description: "Bank of Canada series identifier"
+        tests:
+          - not_null
+      - name: value
+        description: "Numeric value for this observation"
+        tests:
+          - not_null
+      - name: date
+        description: "Date of the observation"
+        tests:
+          - not_null
+
+  - name: stg_edgar_filings
+    description: "Cleaned SEC EDGAR filing metadata for Canadian companies"
+    columns:
+      - name: id
+        description: "Primary key"
+        tests:
+          - unique
+          - not_null
+      - name: company_name
+        description: "Name of the filing company"
+        tests:
+          - not_null
+      - name: filing_date
+        description: "Date the filing was submitted to SEC"
+        tests:
+          - not_null
+      - name: accession_number
+        description: "Unique SEC accession number"
+        tests:
+          - unique
+          - not_null

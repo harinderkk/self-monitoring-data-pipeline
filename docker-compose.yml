@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: sedar_postgres
+    environment:
+      POSTGRES_USER: sedar_user
+      POSTGRES_PASSWORD: sedar_pass
+      POSTGRES_DB: sedar_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sedar_user", "-d", "sedar_db"]
+      interval: 10s
+      retries: 5
+
+  airflow:
+    build: .
+    container_name: sedar_airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "sedar_pipeline_secret"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      POSTGRES_HOST: sedar_postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: sedar_db
+      POSTGRES_USER: sedar_user
+      POSTGRES_PASSWORD: sedar_pass
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./logs:/opt/airflow/logs
+      - ./.env:/opt/airflow/.env
+      - airflow_data:/opt/airflow
+    ports:
+      - "8080:8080"
+    command: standalone
+    restart: unless-stopped
+
+  streamlit:
+    image: python:3.11-slim
+    container_name: sedar_streamlit
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: sedar_postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: sedar_db
+      POSTGRES_USER: sedar_user
+      POSTGRES_PASSWORD: sedar_pass
+    volumes:
+      - ./app.py:/app/app.py
+      - ./requirements.txt:/app/requirements.txt
+      - ./.streamlit:/app/.streamlit
+    working_dir: /app
+    command: >
+      bash -c "pip install -r requirements.txt --quiet &&
+               streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  airflow_data:
