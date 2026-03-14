@@ -191,4 +191,4 @@ Schedule: `0 9 * * 1-5` — 9am every weekday
 
 - Airflow is configured with SequentialExecutor for local development
 - In production this would use CeleryExecutor or KubernetesExecutor on Linux
-- SEDAR+ (Canadian filing system) was evaluated but blocked by Radware bot protection — SEC EDGAR was chosen as the data source for Canadian cross-listed companies
+- SEDAR+ (Canadian filing system) was evaluated but blocked by Radware bot protection — SEC EDGAR was chosen as the data source for Canadian cross-listed companiesx

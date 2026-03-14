@@ -260,7 +260,8 @@ def fetch_edgar_filings(cik, company_name, form_type='40-F', limit=10):
             forms      = filing_data['form']
             dates      = filing_data['filingDate']
             accessions = filing_data['accessionNumber']
-            for form, date, acc in zip(forms, dates, accessions):
+            reports    = filing_data.get('reportDate', [''] * len(forms))
+            for form, date, acc, report in zip(forms, dates, accessions, reports):
                 if form_type in form:
                     filings.append({
                         'company_name':     company_name,
@@ -268,6 +269,7 @@ def fetch_edgar_filings(cik, company_name, form_type='40-F', limit=10):
                         'form_type':        form,
                         'filing_date':      date,
                         'accession_number': acc,
+                        'period_ending':    report or None,
                         'document_url':     f"https://www.sec.gov/Archives/edgar/full-index/{date[:4]}/{acc}"
                     })
                 if len(filings) >= limit:
@@ -339,13 +341,14 @@ def store_edgar_filings(filings):
 
     records = [
         (f['company_name'], f['cik'], f['form_type'],
-         f['filing_date'], f['accession_number'], f.get('document_url'))
+         f['filing_date'], f['accession_number'], 
+         f.get('period_ending') or None,f.get('document_url'))
         for f in filings
     ]
 
     execute_values(cur, """
         INSERT INTO raw_edgar_filings
-            (company_name, cik, form_type, filing_date, accession_number, document_url)
+            (company_name, cik, form_type, filing_date, accession_number,  period_ending, document_url)
         VALUES %s
         ON CONFLICT (accession_number) DO NOTHING
     """, records)
