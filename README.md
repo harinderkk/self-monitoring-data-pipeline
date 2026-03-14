@@ -1,6 +1,11 @@
 # 🇨🇦 AI-Powered Self-Monitoring Canadian Financial Data Pipeline
 
-A production-grade data pipeline that ingests Canadian financial data, automatically detects anomalies, explains them in plain English using an LLM, and fires Slack alerts with suggested fixes — all orchestrated by Apache Airflow and visualized in a live Streamlit dashboard.
+Most portfolio pipelines ingest data and stop. This one watches itself.
+
+It ingests Canadian financial data from two sources, runs 5 automated health 
+checks on every run, explains anomalies in plain English using an LLM, and 
+fires Slack alerts with suggested fixes — all orchestrated by Airflow and 
+visualized in a live Streamlit dashboard.
 
 ---
 
@@ -16,14 +21,14 @@ SEC EDGAR API      ─┘         │
                     LLM explains in plain English
                               │
                               ▼
-                    Slack alert fired 🔔
+                    Slack alert sent 🔔
 ```
 
 **Orchestrated by Apache Airflow — runs automatically every weekday at 9am.**
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -38,7 +43,7 @@ SEC EDGAR API      ─┘         │
 
 ---
 
-## 📊 Data Sources
+## Data Sources
 
 ### Bank of Canada API
 - USD/CAD, EUR/CAD, GBP/CAD exchange rates (daily)
@@ -59,9 +64,7 @@ SEC EDGAR API      ─┘         │
 
 ---
 
-## 🤖 What Makes This Different
-
-Most portfolio pipelines ingest data and stop. This one watches itself.
+## Self-Monitoring Layer
 
 The monitor runs 5 automated checks every pipeline run:
 1. **Missing companies** — are all 8 companies reporting?
@@ -77,8 +80,7 @@ When an anomaly is detected the LLM layer transforms this:
 Into this:
 ```
 What happened: The monthly inflation data series from the Bank of Canada 
-has not been updated in 95 days, exceeding the 40-day threshold. This 
-means the most recent data is over 3 months old.
+has not been updated in 95 days, exceeding the 40-day threshold.
 
 Impact: Having outdated inflation data could lead to incorrect economic 
 analysis and forecasting.
@@ -92,33 +94,87 @@ That explanation is then fired to Slack automatically.
 
 ---
 
-## 🚀 Quick Start
+## Incremental Loading with Watermarks
+
+Every run is idempotent and crash-safe.
+
+The pipeline uses a `pipeline_watermarks` table to track the last 
+successfully processed date per source. On each run:
+
+1. Read watermark → "I last processed FXUSDCAD up to 2026-03-13"
+2. Fetch only data newer than that date
+3. Store it
+4. Update the watermark — **only after confirmed successful insert**
+
+If the pipeline crashes in step 3, the watermark never updates. 
+The next run retries from the exact same point — no gaps, no duplicates.
+
+Each source has an independent watermark, so a failure in one series 
+does not affect others.
+
+This is what Delta Lake handles automatically via transaction logs. 
+Building it manually makes the underlying mechanism explicit.
+```sql
+SELECT source_type, source_id, last_successful_date, last_run_at
+FROM pipeline_watermarks
+ORDER BY source_type, source_id;
+```
+
+---
+
+## Chaos Testing
+
+`scripts/chaos.py` injects 6 types of controlled failures to verify 
+the monitor actually catches problems:
+
+- Missing values
+- Duplicate records
+- Schema drift
+- Late data
+- Corrupted values
+- Missing series
+
+---
+
+## Quick Start
 
 **Prerequisites:** Docker Desktop, OpenRouter API key, Slack Bot token
 
 1. Clone the repo:
 ```bash
-git clone https://github.com/yourusername/sedar-pipeline.git
-cd sedar-pipeline
+git clone https://github.com/harinderkk/self-monitoring-data-pipeline.git
+cd self-monitoring-data-pipeline
 ```
 
-2. Create your `.env` file:
+2. Create the watermarks table in PostgreSQL:
+```sql
+CREATE TABLE IF NOT EXISTS pipeline_watermarks (
+    source_type         VARCHAR(50),
+    source_id           VARCHAR(100),
+    last_successful_date DATE,
+    last_run_at         TIMESTAMP,
+    records_inserted    INTEGER DEFAULT 0,
+    PRIMARY KEY (source_type, source_id)
+);
+```
+
+3. Create your `.env` file:
 ```bash
 cp .env.example .env
 # Add your OPENROUTER_API_KEY and SLACK_BOT_TOKEN
 ```
 
-3. Start the full stack:
+4. Start the full stack:
 ```bash
 docker-compose up -d
 ```
 
-4. Access the services:
+5. Access the services:
 - **Streamlit Dashboard:** http://localhost:8501
 - **Airflow UI:** http://localhost:8080
 - **PostgreSQL:** localhost:5432
 
-5. Run the pipeline manually:
+6. Run the pipeline manually:
 ```bash
 docker exec sedar_airflow airflow dags trigger sedar_pipeline
 ```
@@ -129,7 +185,7 @@ docker exec sedar_airflow airflow dags trigger sedar_pipeline
 ```
 sedar-pipeline/
 ├── scripts/
-│   ├── ingestion.py      # Bank of Canada + EDGAR data ingestion
+│   ├── ingestion.py      # Incremental ingestion with watermark pattern
 │   ├── monitor.py        # 5 automated pipeline health checks
 │   ├── alerts.py         # LLM explanation + Slack alerting
 │   └── chaos.py          # Controlled failure injection for testing
@@ -147,14 +203,14 @@ sedar-pipeline/
 
 ## 🗄️ Database Schema
 ```sql
-raw_market_data        -- Bank of Canada time series (86+ records)
-raw_edgar_filings      -- SEC EDGAR filing metadata (57+ records)
+-- Raw tables
+raw_market_data        -- Bank of Canada time series
+raw_edgar_filings      -- SEC EDGAR filing metadata + period_ending
 pipeline_health_log    -- Every pipeline run logged
 anomaly_log            -- Every anomaly with LLM explanation
-```
+pipeline_watermarks    -- Incremental load checkpoints per source
 
-**dbt models (analytics schema):**
-```sql
+-- dbt models (analytics schema)
 stg_market_data        -- Cleaned market data (view)
 stg_edgar_filings      -- Cleaned filing metadata (view)
 mart_daily_rates       -- Exchange rates with daily changes (table)
@@ -164,31 +220,44 @@ mart_pipeline_health   -- Daily health scores (table)
 
 ---
 
-## ⚙️ Airflow DAG
+## Airflow DAG
 ```
 ingest_market_data ─┐
                     ├──► run_monitor ──► run_alerts
 ingest_edgar_filings─┘
 ```
-
 Schedule: `0 9 * * 1-5` — 9am every weekday
 
 ---
 
-## 🧪 Chaos Testing
+## Key Engineering Decisions
 
-`scripts/chaos.py` injects 6 types of controlled failures to test the monitor:
-- Missing values
-- Duplicate records  
-- Schema drift
-- Late data
-- Corrupted values
-- Missing series
+**Why SEC EDGAR instead of SEDAR+?**
+SEDAR+ (Canada's official filing system) was the original data source. 
+It was abandoned after Radware bot protection blocked all programmatic 
+access. So, pivoted to SEC EDGAR. Canadian companies cross-listed on US 
+exchanges file 40-F forms, which are functionally equivalent to annual 
+reports and contain the same financial data.
 
----
+**Why context-aware staleness thresholds?**
+The monitor uses different thresholds for daily vs monthly data — 
+5 days for exchange rates, 40 days for the overnight rate and commodity 
+index. A single threshold would generate false positives for monthly 
+series that are working perfectly but haven't published yet.
 
-## 📝 Notes
+**Why SequentialExecutor in Airflow?**
+LocalExecutor causes SIGSEGV crashes on macOS Apple Silicon due to a 
+known multiprocessing issue. SequentialExecutor runs tasks one at a 
+time and is stable. 
 
-- Airflow is configured with SequentialExecutor for local development
-- In production this would use CeleryExecutor or KubernetesExecutor on Linux
-- SEDAR+ (Canadian filing system) was evaluated but blocked by Radware bot protection — SEC EDGAR was chosen as the data source for Canadian cross-listed companiesx
+**Why raw psycopg2 instead of SQLAlchemy?**
+pandas and SQLAlchemy had a version incompatibility that caused silent 
+failures on insert. Switched to psycopg2 directly with `execute_values` 
+for bulk inserts explicit, fast, and no hidden ORM behaviour.
+
+**Why update the watermark after the insert, not before?**
+If the watermark updated before the insert and the pipeline crashed, 
+the next run would skip that data permanently — silent data loss with 
+no error. Updating after confirmed success means the worst case is a 
+duplicate attempt on the next run, which `ON CONFLICT DO NOTHING` 
+handles safely.
